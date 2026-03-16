@@ -83,7 +83,7 @@
 
 .actions-panel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
 
@@ -114,6 +114,12 @@ button:disabled {
   gap: 8px;
 }
 
+.reductions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 8px;
+}
+
 .metric h2 {
   margin: 0;
   color: #666;
@@ -134,6 +140,8 @@ button:disabled {
   color: #222;
   font-size: 14px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .plain-list {
@@ -158,6 +166,78 @@ button:disabled {
   border-radius: 4px;
   padding: 6px 8px;
   background: #fff;
+}
+
+.birthday-export-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.birthday-export-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: end;
+}
+
+.birthday-export-controls label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: #333;
+}
+
+.birthday-export-controls select {
+  min-width: 220px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.birthday-export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.birthday-export-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.birthday-export-list li {
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.birthday-export-list li label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #333;
+}
+
+.birthday-export-list input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+}
+
+.birthday-export-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
 }
 
 .highlight {
@@ -293,8 +373,25 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .reductions-grid {
+    grid-template-columns: 1fr;
+  }
+
   .calendar-list li {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+
+  .birthday-export-controls {
+    align-items: stretch;
+  }
+
+  .birthday-export-controls select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .birthday-export-footer {
+    align-items: stretch;
   }
 }

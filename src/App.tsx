@@ -31,7 +31,11 @@ type BirthdayRow = Employee & {
   milestone: boolean
 }
 
-const MILESTONES = new Set([30, 40, 50, 57, 60])
+type BirthdayExportFormat = 'ics' | 'pdf'
+
+function isRoundBirthdayAge(age: number): boolean {
+  return age >= 20 && age % 10 === 0
+}
 const ALLOWED_PREFIXES = ['69', '75', '76', '79']
 const ALLOWED_EXACT_CODES = ['995401', '995405', '995101']
 const REQUIRED_COLUMN_MATCHERS: Array<{ label: string; keys: string[] }> = [
@@ -431,6 +435,9 @@ function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadHint, setUploadHint] = useState('')
   const [inactiveAvdelingslisteIds, setInactiveAvdelingslisteIds] = useState<Set<string>>(new Set())
+  const [birthdayExportFormat, setBirthdayExportFormat] = useState<BirthdayExportFormat | null>(null)
+  const [selectedBirthdayAvdeling, setSelectedBirthdayAvdeling] = useState('')
+  const [inactiveBirthdayExportIds, setInactiveBirthdayExportIds] = useState<Set<string>>(new Set())
 
   const birthdays = useMemo<BirthdayRow[]>(() => {
     const year = new Date().getFullYear()
@@ -440,7 +447,7 @@ function App() {
         return {
           ...employee,
           alderDetteAret,
-          milestone: MILESTONES.has(alderDetteAret),
+          milestone: isRoundBirthdayAge(alderDetteAret),
         }
       })
       .sort((a, b) => {
@@ -459,6 +466,48 @@ function App() {
   const milestones = useMemo(
     () => birthdays.filter((entry) => entry.milestone),
     [birthdays],
+  )
+
+  const reduction57 = useMemo(
+    () =>
+      birthdays
+        .filter((entry) => entry.alderDetteAret >= 57 && entry.alderDetteAret <= 59)
+        .sort((a, b) => a.navn.localeCompare(b.navn, 'nb')),
+    [birthdays],
+  )
+
+  const reduction60 = useMemo(
+    () =>
+      birthdays
+        .filter((entry) => entry.alderDetteAret >= 60)
+        .sort((a, b) => a.navn.localeCompare(b.navn, 'nb')),
+    [birthdays],
+  )
+
+  const birthdayByAvdeling = useMemo(() => {
+    const grouped = new Map<string, BirthdayRow[]>()
+    for (const birthday of birthdays) {
+      const key = birthday.avdeling || 'Ukjent avdeling'
+      const existing = grouped.get(key) ?? []
+      existing.push(birthday)
+      grouped.set(key, existing)
+    }
+
+    for (const list of grouped.values()) {
+      list.sort((a, b) => a.navn.localeCompare(b.navn, 'nb'))
+    }
+
+    return [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0], 'nb'))
+  }, [birthdays])
+
+  const birthdayAvdelingPeople = useMemo(
+    () => birthdayByAvdeling.find(([name]) => name === selectedBirthdayAvdeling)?.[1] ?? [],
+    [birthdayByAvdeling, selectedBirthdayAvdeling],
+  )
+
+  const birthdayExportPeople = useMemo(
+    () => birthdayAvdelingPeople.filter((person) => !inactiveBirthdayExportIds.has(person.id)),
+    [birthdayAvdelingPeople, inactiveBirthdayExportIds],
   )
 
   const byAvdeling = useMemo(() => {
@@ -655,7 +704,7 @@ function App() {
     }
   }
 
-  function exportBirthdayPDF(): void {
+  function exportBirthdayPDF(items: BirthdayRow[]): void {
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
@@ -690,7 +739,7 @@ function App() {
 
     // Table rows
     doc.setFont('helvetica', 'normal')
-    for (const person of birthdays) {
+    for (const person of items) {
       if (yPos > pageHeight - 20) {
         doc.addPage()
         yPos = margin
@@ -719,12 +768,12 @@ function App() {
     doc.save('bursdagskalender.pdf')
   }
 
-  function exportBirthdayICS(): void {
+  function exportBirthdayICS(items: BirthdayRow[]): void {
     const today = new Date()
     const year = today.getFullYear()
     const dtstamp = toICSDate(today)
 
-    const events = birthdays
+    const events = items
       .map((employee, index) => {
         const date = new Date(
           year,
@@ -762,6 +811,194 @@ function App() {
       new Blob([ics], { type: 'text/calendar;charset=utf-8;' }),
       'ansatte-bursdager.ics',
     )
+  }
+
+  function exportRundeDagerPDF(): void {
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const margin = 15
+    let yPos = margin
+
+    doc.setFontSize(18)
+    doc.text('Runde dager', margin, yPos)
+    yPos += 10
+
+    doc.setFontSize(10)
+    doc.text(`Generert: ${formatNorwegianDate(new Date())}`, margin, yPos)
+    yPos += 8
+
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    const col1 = margin
+    const col2 = margin + 30
+    const col3 = margin + 85
+    const col4 = margin + 150
+
+    doc.text('Dato', col1, yPos)
+    doc.text('Navn', col2, yPos)
+    doc.text('Avdeling', col3, yPos)
+    doc.text('Alder', col4, yPos)
+    yPos += 2
+    doc.line(margin, yPos, pageWidth - margin, yPos)
+    yPos += 5
+
+    doc.setFont('helvetica', 'normal')
+    if (milestones.length === 0) {
+      doc.text('Ingen funnet.', margin, yPos)
+    } else {
+      for (const person of milestones) {
+        if (yPos > pageHeight - 20) {
+          doc.addPage()
+          yPos = margin
+        }
+
+        const dateStr = formatDayMonth(person.fodselsdato)
+        const name = person.navn.length > 25 ? `${person.navn.substring(0, 22)}...` : person.navn
+        const avdeling = (person.avdeling || 'Ukjent').length > 30
+          ? `${(person.avdeling || 'Ukjent').substring(0, 27)}...`
+          : (person.avdeling || 'Ukjent')
+        const age = `${person.alderDetteAret} år`
+
+        doc.text(dateStr, col1, yPos)
+        doc.text(name, col2, yPos)
+        doc.text(avdeling, col3, yPos)
+        doc.text(age, col4, yPos)
+        yPos += 6
+      }
+    }
+
+    doc.save('runde-dager.pdf')
+  }
+
+  function exportSeniorreduksjonPDF(): void {
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const margin = 15
+    let yPos = margin
+
+    const drawSection = (title: string, rows: BirthdayRow[]): void => {
+      if (yPos > pageHeight - 30) {
+        doc.addPage()
+        yPos = margin
+      }
+
+      doc.setFontSize(12)
+      doc.setFont('helvetica', 'bold')
+      doc.text(title, margin, yPos)
+      yPos += 6
+
+      doc.setFontSize(9)
+      doc.text('Navn', margin, yPos)
+      doc.text('Avdeling', margin + 85, yPos)
+      doc.text('Alder', margin + 155, yPos)
+      yPos += 2
+      doc.line(margin, yPos, pageWidth - margin, yPos)
+      yPos += 5
+
+      doc.setFont('helvetica', 'normal')
+      if (rows.length === 0) {
+        doc.text('Ingen funnet.', margin, yPos)
+        yPos += 8
+        return
+      }
+
+      for (const person of rows) {
+        if (yPos > pageHeight - 20) {
+          doc.addPage()
+          yPos = margin
+        }
+
+        const name = person.navn.length > 36 ? `${person.navn.substring(0, 33)}...` : person.navn
+        const avdeling = (person.avdeling || 'Ukjent').length > 30
+          ? `${(person.avdeling || 'Ukjent').substring(0, 27)}...`
+          : (person.avdeling || 'Ukjent')
+        const age = `${person.alderDetteAret} år`
+
+        doc.text(name, margin, yPos)
+        doc.text(avdeling, margin + 85, yPos)
+        doc.text(age, margin + 155, yPos)
+        yPos += 6
+      }
+
+      yPos += 4
+    }
+
+    doc.setFontSize(18)
+    doc.text('Seniorreduksjon', margin, yPos)
+    yPos += 10
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Generert: ${formatNorwegianDate(new Date())}`, margin, yPos)
+    yPos += 10
+
+    drawSection('57års-reduksjon (6%)', reduction57)
+    drawSection('60års-reduksjon (12,5%)', reduction60)
+
+    doc.save('seniorreduksjon.pdf')
+  }
+
+  function openBirthdayExport(format: BirthdayExportFormat): void {
+    if (birthdays.length === 0) {
+      return
+    }
+
+    setBirthdayExportFormat(format)
+    const firstAvdeling = birthdayByAvdeling[0]?.[0] ?? ''
+    setSelectedBirthdayAvdeling((prev) => {
+      if (prev && birthdayByAvdeling.some(([name]) => name === prev)) {
+        return prev
+      }
+      return firstAvdeling
+    })
+    setInactiveBirthdayExportIds(new Set())
+  }
+
+  function closeBirthdayExport(): void {
+    setBirthdayExportFormat(null)
+    setInactiveBirthdayExportIds(new Set())
+  }
+
+  function toggleBirthdayExportPerson(employeeId: string): void {
+    setInactiveBirthdayExportIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(employeeId)) {
+        next.delete(employeeId)
+      } else {
+        next.add(employeeId)
+      }
+      return next
+    })
+  }
+
+  function setBirthdayAvdelingActiveState(shouldBeActive: boolean): void {
+    setInactiveBirthdayExportIds((prev) => {
+      const next = new Set(prev)
+      for (const person of birthdayAvdelingPeople) {
+        if (shouldBeActive) {
+          next.delete(person.id)
+        } else {
+          next.add(person.id)
+        }
+      }
+      return next
+    })
+  }
+
+  function confirmBirthdayExport(): void {
+    if (!birthdayExportFormat || birthdayExportPeople.length === 0) {
+      return
+    }
+
+    if (birthdayExportFormat === 'pdf') {
+      exportBirthdayPDF(birthdayExportPeople)
+    } else {
+      exportBirthdayICS(birthdayExportPeople)
+    }
+
+    closeBirthdayExport()
   }
 
   async function exportAvdelingWord(): Promise<void> {
@@ -910,13 +1147,85 @@ function App() {
       </section>
 
       <section className="panel actions-panel">
-        <button disabled={birthdays.length === 0} onClick={exportBirthdayICS}>
+        <button disabled={birthdays.length === 0} onClick={() => openBirthdayExport('ics')}>
           Last ned bursdagskalender (.ics)
         </button>
-        <button disabled={birthdays.length === 0} onClick={exportBirthdayPDF}>
+        <button disabled={birthdays.length === 0} onClick={() => openBirthdayExport('pdf')}>
           Last ned bursdagskalender (.pdf)
         </button>
+        <button disabled={milestones.length === 0} onClick={exportRundeDagerPDF}>
+          Last ned runde dager (.pdf)
+        </button>
+        <button
+          disabled={reduction57.length === 0 && reduction60.length === 0}
+          onClick={exportSeniorreduksjonPDF}
+        >
+          Last ned seniorreduksjon (.pdf)
+        </button>
       </section>
+
+      {birthdayExportFormat ? (
+        <section className="panel birthday-export-panel">
+          <h2>Velg avdeling og ansatte før nedlasting</h2>
+          <div className="birthday-export-controls">
+            <label>
+              Avdeling
+              <select
+                value={selectedBirthdayAvdeling}
+                onChange={(event) => {
+                  setSelectedBirthdayAvdeling(event.target.value)
+                  setInactiveBirthdayExportIds(new Set())
+                }}
+              >
+                {birthdayByAvdeling.map(([avdeling]) => (
+                  <option key={avdeling} value={avdeling}>
+                    {avdeling}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="birthday-export-buttons">
+              <button onClick={() => setBirthdayAvdelingActiveState(true)}>Marker alle</button>
+              <button onClick={() => setBirthdayAvdelingActiveState(false)}>Fjern alle</button>
+            </div>
+          </div>
+
+          {birthdayAvdelingPeople.length === 0 ? (
+            <p className="muted">Ingen ansatte i valgt avdeling.</p>
+          ) : (
+            <ul className="birthday-export-list">
+              {birthdayAvdelingPeople.map((person) => {
+                const checked = !inactiveBirthdayExportIds.has(person.id)
+                return (
+                  <li key={`${person.id}-birthday-export`}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleBirthdayExportPerson(person.id)}
+                      />
+                      <span>{person.navn}</span>
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          <div className="birthday-export-footer">
+            <p className="muted">
+              Valgt: {birthdayExportPeople.length} av {birthdayAvdelingPeople.length}
+            </p>
+            <div className="birthday-export-buttons">
+              <button disabled={birthdayExportPeople.length === 0} onClick={confirmBirthdayExport}>
+                Last ned valgt kalender ({birthdayExportFormat === 'pdf' ? '.pdf' : '.ics'})
+              </button>
+              <button onClick={closeBirthdayExport}>Avbryt</button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="stats-grid">
         <article className="metric panel">
@@ -924,13 +1233,47 @@ function App() {
           <p>{employees.length}</p>
         </article>
         <article className="metric panel">
-          <h2>Runde tall / 57 i år</h2>
+          <h2>Runde dager i år</h2>
           <p>{milestones.length}</p>
         </article>
       </section>
 
+      <section className="reductions-grid">
+        <article className="panel">
+          <h2>57års-reduksjon (6%)</h2>
+          {reduction57.length === 0 ? (
+            <p className="muted">Ingen ansatte mellom 57 og 59 år.</p>
+          ) : (
+            <ul className="plain-list">
+              {reduction57.map((person) => (
+                <li key={`${person.navn}-${person.fodselsdato.toISOString()}-57`}>
+                  <strong>{person.navn}</strong> - {person.avdeling || 'Ukjent avdeling'} -{' '}
+                  {person.alderDetteAret} år
+                </li>
+              ))}
+            </ul>
+          )}
+        </article>
+
+        <article className="panel">
+          <h2>60års-reduksjon (12,5%)</h2>
+          {reduction60.length === 0 ? (
+            <p className="muted">Ingen ansatte som fyller eller har fylt 60 år.</p>
+          ) : (
+            <ul className="plain-list">
+              {reduction60.map((person) => (
+                <li key={`${person.navn}-${person.fodselsdato.toISOString()}-60`}>
+                  <strong>{person.navn}</strong> - {person.avdeling || 'Ukjent avdeling'} -{' '}
+                  {person.alderDetteAret} år
+                </li>
+              ))}
+            </ul>
+          )}
+        </article>
+      </section>
+
       <section className="panel">
-        <h2>De som fyller milepæl i år</h2>
+        <h2>Runde dager</h2>
         {milestones.length === 0 ? (
           <p className="muted">Ingen funnet enda.</p>
         ) : (
