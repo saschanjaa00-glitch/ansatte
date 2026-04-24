@@ -33,10 +33,28 @@ type BirthdayRow = Employee & {
 
 type BirthdayExportFormat = 'ics' | 'pdf'
 
+type ParsedEmployeeRow = {
+  navn: string
+  telefon: string
+  fodselsdato: Date
+  avdeling: string
+  stillingskode: string
+  arbeidstittel: string
+  hovedstilling: string
+  skolearsplanlegging: string
+  stillingskoder: string[]
+}
+
+type ImportStillingskodeOption = {
+  id: string
+  stillingskode: string
+  arbeidstittel: string
+}
+
 function isRoundBirthdayAge(age: number): boolean {
   return age >= 20 && age % 10 === 0
 }
-const ALLOWED_PREFIXES = ['69', '75', '76', '79']
+const ALLOWED_PREFIXES = ['65', '66', '69', '72', '75', '76', '79', '80', '84']
 const ALLOWED_EXACT_CODES = ['995401', '995405', '995101']
 const REQUIRED_COLUMN_MATCHERS: Array<{ label: string; keys: string[] }> = [
   { label: 'navn', keys: ['navn', 'name'] },
@@ -47,7 +65,10 @@ const REQUIRED_COLUMN_MATCHERS: Array<{ label: string; keys: string[] }> = [
   },
   { label: 'avdeling', keys: ['avdeling'] },
   { label: 'stillingskoder', keys: ['stillingskode', 'stillingskoder'] },
-  { label: 'hovedjobb/hovedstilling', keys: ['hovedstilling', 'hovedjobb', 'hovedjob'] },
+  {
+    label: 'hovedjobb/hovedstilling/arbeidstittel',
+    keys: ['hovedstilling', 'hovedjobb', 'hovedjob', 'arbeidstittel', 'stillingstittel'],
+  },
   {
     label: 'inkluder i timeplanlegging/skoleårsplanlegging',
     keys: [
@@ -254,17 +275,39 @@ function toDate(value: unknown): Date | null {
   return null
 }
 
-function hasAllowedStillingskode(raw: string): boolean {
+function extractStillingskoder(raw: string): string[] {
   const inParens = [...raw.matchAll(/\((\d+)\)/g)].map((m) => m[1])
   const candidates =
     inParens.length > 0
       ? inParens
       : [...raw.matchAll(/\b(\d{2,})\b/g)].map((m) => m[1])
 
-  return candidates.some(
-    (code) =>
-      ALLOWED_PREFIXES.some((prefix) => code.startsWith(prefix)) ||
-      ALLOWED_EXACT_CODES.includes(code),
+  return [...new Set(candidates)]
+}
+
+function extractArbeidstittelText(raw: string): string {
+  const normalized = raw.trim().replace(/\s+/g, ' ')
+  if (!normalized) {
+    return ''
+  }
+
+  const textOnly = normalized
+    .replace(/\(\s*\d+\s*\)/g, ' ')
+    .replace(/\b\d{2,}\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return textOnly || normalized
+}
+
+function toImportOptionId(stillingskode: string, arbeidstittel: string): string {
+  return `${stillingskode}|||${arbeidstittel}`
+}
+
+function isDefaultStillingskode(code: string): boolean {
+  return (
+    ALLOWED_PREFIXES.some((prefix) => code.startsWith(prefix)) ||
+    ALLOWED_EXACT_CODES.includes(code)
   )
 }
 
@@ -436,8 +479,13 @@ function App() {
   const [uploadHint, setUploadHint] = useState('')
   const [inactiveAvdelingslisteIds, setInactiveAvdelingslisteIds] = useState<Set<string>>(new Set())
   const [birthdayExportFormat, setBirthdayExportFormat] = useState<BirthdayExportFormat | null>(null)
-  const [selectedBirthdayAvdeling, setSelectedBirthdayAvdeling] = useState('')
+  const [selectedBirthdayAvdelinger, setSelectedBirthdayAvdelinger] = useState<Set<string>>(new Set())
   const [inactiveBirthdayExportIds, setInactiveBirthdayExportIds] = useState<Set<string>>(new Set())
+  const [pendingImportRows, setPendingImportRows] = useState<ParsedEmployeeRow[]>([])
+  const [pendingImportFileName, setPendingImportFileName] = useState('')
+  const [defaultStillingskodeOptions, setDefaultStillingskodeOptions] = useState<ImportStillingskodeOption[]>([])
+  const [otherStillingskodeOptions, setOtherStillingskodeOptions] = useState<ImportStillingskodeOption[]>([])
+  const [selectedImportStillingskoder, setSelectedImportStillingskoder] = useState<Set<string>>(new Set())
 
   const birthdays = useMemo<BirthdayRow[]>(() => {
     const year = new Date().getFullYear()
@@ -500,10 +548,20 @@ function App() {
     return [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0], 'nb'))
   }, [birthdays])
 
-  const birthdayAvdelingPeople = useMemo(
-    () => birthdayByAvdeling.find(([name]) => name === selectedBirthdayAvdeling)?.[1] ?? [],
-    [birthdayByAvdeling, selectedBirthdayAvdeling],
+  const birthdayAvdelingNames = useMemo(
+    () => birthdayByAvdeling.map(([name]) => name),
+    [birthdayByAvdeling],
   )
+
+  const isAllBirthdayAvdelingerSelected =
+    birthdayAvdelingNames.length > 0 && selectedBirthdayAvdelinger.size === birthdayAvdelingNames.length
+
+  const birthdayAvdelingPeople = useMemo(() => {
+    const selectedIds = new Set(selectedBirthdayAvdelinger)
+    return birthdayByAvdeling
+      .filter(([name]) => selectedIds.has(name))
+      .flatMap(([, people]) => people)
+  }, [birthdayByAvdeling, selectedBirthdayAvdelinger])
 
   const birthdayExportPeople = useMemo(
     () => birthdayAvdelingPeople.filter((person) => !inactiveBirthdayExportIds.has(person.id)),
@@ -545,9 +603,31 @@ function App() {
     return [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0], 'nb'))
   }, [employees, inactiveAvdelingslisteIds])
 
+  const importPreviewCount = useMemo(
+    () =>
+      pendingImportRows.filter((row) =>
+        selectedImportStillingskoder.has(toImportOptionId(row.stillingskode, row.arbeidstittel)),
+      ).length,
+    [pendingImportRows, selectedImportStillingskoder],
+  )
+
+  const allStillingskodeOptions = useMemo(
+    () => [...defaultStillingskodeOptions, ...otherStillingskodeOptions],
+    [defaultStillingskodeOptions, otherStillingskodeOptions],
+  )
+
+  function resetPendingImport(): void {
+    setPendingImportRows([])
+    setPendingImportFileName('')
+    setDefaultStillingskodeOptions([])
+    setOtherStillingskodeOptions([])
+    setSelectedImportStillingskoder(new Set())
+  }
+
   async function handleExcelFile(file: File): Promise<void> {
     setError('')
     setUploadHint('')
+    resetPendingImport()
 
     try {
       if (!/\.(xlsx|xls)$/i.test(file.name)) {
@@ -576,7 +656,7 @@ function App() {
         )
       }
 
-      const mapped: Employee[] = []
+      const mapped: ParsedEmployeeRow[] = []
 
       for (const row of rows) {
         const navn = extractName(row)
@@ -588,7 +668,12 @@ function App() {
         const stillingskode = String(
           safeValue(row, ['stillingskode', 'stillingskoder']) || '',
         ).trim()
-        const hovedstilling = String(safeValue(row, ['hovedstilling']) || '').trim()
+        const stillingskoder = extractStillingskoder(stillingskode)
+        const arbeidstittelRaw = String(
+          safeValue(row, ['arbeidstittel', 'stillingstittel', 'hovedstilling', 'hovedjobb', 'hovedjob']) || '',
+        ).trim()
+        const arbeidstittel = extractArbeidstittelText(arbeidstittelRaw)
+        const hovedstilling = arbeidstittelRaw
         const skolearsplanlegging = String(
           safeValue(row, [
             'inkludert i skoleårsplanlegging',
@@ -603,32 +688,63 @@ function App() {
 
         const fodselsdato = toDate(fodselsdatoRaw)
 
-        if (!navn || !fodselsdato || !hasAllowedStillingskode(stillingskode)) {
+        if (!navn || !fodselsdato || stillingskoder.length === 0) {
           continue
         }
 
         mapped.push({
-          id: `${navn}-${fodselsdato.getTime()}-${telefon}-${mapped.length}`,
           navn,
           telefon,
           fodselsdato,
           avdeling: extractAvdeling(avdelingRaw),
           stillingskode,
+          arbeidstittel,
           hovedstilling,
           skolearsplanlegging,
+          stillingskoder,
         })
       }
 
       if (rows.length > 0 && mapped.length === 0) {
         throw new Error(
-          'Ingen ansatte ble importert. Kontroller at stillingskoder inneholder koder i parentes som starter med 69, 75, 76, 79 eller er 995401, 995405, 995101.',
+          'Ingen gyldige ansatte funnet. Kontroller at navn, fødselsdato og stillingskoder er utfylt.',
         )
       }
 
-      setEmployees(mapped)
-      setInactiveAvdelingslisteIds(new Set())
-      setFileName(file.name)
-      setUploadHint(`Fil registrert: ${file.name}`)
+      const optionsById = new Map<string, ImportStillingskodeOption>()
+      for (const employee of mapped) {
+        const arbeidstittelValue = employee.arbeidstittel || 'Ukjent'
+        const id = toImportOptionId(employee.stillingskode, arbeidstittelValue)
+        if (!optionsById.has(id)) {
+          optionsById.set(id, {
+            id,
+            stillingskode: employee.stillingskode,
+            arbeidstittel: arbeidstittelValue,
+          })
+        }
+      }
+
+      const allOptions = [...optionsById.values()].sort((a, b) => {
+        const titleCompare = a.arbeidstittel.localeCompare(b.arbeidstittel, 'nb')
+        if (titleCompare !== 0) {
+          return titleCompare
+        }
+        return a.stillingskode.localeCompare(b.stillingskode, 'nb')
+      })
+
+      const defaultCodes = allOptions.filter((option) =>
+        extractStillingskoder(option.stillingskode).some((code) => isDefaultStillingskode(code)),
+      )
+      const otherCodes = allOptions.filter(
+        (option) => !extractStillingskoder(option.stillingskode).some((code) => isDefaultStillingskode(code)),
+      )
+
+      setPendingImportRows(mapped)
+      setPendingImportFileName(file.name)
+      setDefaultStillingskodeOptions(defaultCodes)
+      setOtherStillingskodeOptions(otherCodes)
+      setSelectedImportStillingskoder(new Set(defaultCodes.map((option) => option.id)))
+      setUploadHint(`Fil klar: ${file.name}. Velg stillingskoder i popupen for å fullføre import.`)
     } catch (caught) {
       const message =
         caught instanceof Error ? caught.message : 'Ukjent feil ved lesing av fil.'
@@ -637,7 +753,58 @@ function App() {
       setEmployees([])
       setInactiveAvdelingslisteIds(new Set())
       setFileName('')
+      resetPendingImport()
     }
+  }
+
+  function toggleImportStillingskode(optionId: string): void {
+    setSelectedImportStillingskoder((prev) => {
+      const next = new Set(prev)
+      if (next.has(optionId)) {
+        next.delete(optionId)
+      } else {
+        next.add(optionId)
+      }
+      return next
+    })
+  }
+
+  function cancelImportStillingskoder(): void {
+    resetPendingImport()
+    setUploadHint('')
+  }
+
+  function confirmImportStillingskoder(): void {
+    if (pendingImportRows.length === 0) {
+      return
+    }
+
+    const filtered: Employee[] = pendingImportRows
+      .filter((employee) =>
+        selectedImportStillingskoder.has(toImportOptionId(employee.stillingskode, employee.arbeidstittel || 'Ukjent')),
+      )
+      .map((employee, index) => ({
+        id: `${employee.navn}-${employee.fodselsdato.getTime()}-${employee.telefon}-${index}`,
+        navn: employee.navn,
+        telefon: employee.telefon,
+        fodselsdato: employee.fodselsdato,
+        avdeling: employee.avdeling,
+        stillingskode: employee.stillingskode,
+        hovedstilling: employee.hovedstilling,
+        skolearsplanlegging: employee.skolearsplanlegging,
+      }))
+
+    if (filtered.length === 0) {
+      setError('Ingen ansatte matcher valgte stillingskoder.')
+      return
+    }
+
+    setEmployees(filtered)
+    setInactiveAvdelingslisteIds(new Set())
+    setFileName(pendingImportFileName)
+    setUploadHint(`Fil registrert: ${pendingImportFileName}`)
+    setError('')
+    resetPendingImport()
   }
 
   function toggleAvdelingslistePerson(employeeId: string): void {
@@ -946,13 +1113,7 @@ function App() {
     }
 
     setBirthdayExportFormat(format)
-    const firstAvdeling = birthdayByAvdeling[0]?.[0] ?? ''
-    setSelectedBirthdayAvdeling((prev) => {
-      if (prev && birthdayByAvdeling.some(([name]) => name === prev)) {
-        return prev
-      }
-      return firstAvdeling
-    })
+    setSelectedBirthdayAvdelinger(new Set(birthdayByAvdeling.map(([name]) => name)))
     setInactiveBirthdayExportIds(new Set())
   }
 
@@ -971,6 +1132,32 @@ function App() {
       }
       return next
     })
+  }
+
+  function toggleAllBirthdayAvdelinger(): void {
+    setSelectedBirthdayAvdelinger((prev) => {
+      if (birthdayAvdelingNames.length === 0) {
+        return new Set()
+      }
+      if (prev.size === birthdayAvdelingNames.length) {
+        return new Set()
+      }
+      return new Set(birthdayAvdelingNames)
+    })
+    setInactiveBirthdayExportIds(new Set())
+  }
+
+  function toggleBirthdayAvdeling(avdeling: string): void {
+    setSelectedBirthdayAvdelinger((prev) => {
+      const next = new Set(prev)
+      if (next.has(avdeling)) {
+        next.delete(avdeling)
+      } else {
+        next.add(avdeling)
+      }
+      return next
+    })
+    setInactiveBirthdayExportIds(new Set())
   }
 
   function setBirthdayAvdelingActiveState(shouldBeActive: boolean): void {
@@ -1123,8 +1310,8 @@ function App() {
         <p className="eyebrow">Ansatteverktøy</p>
         <h1>Bursdager og avdelingslister fra Excel</h1>
         <p className="lead">
-          Last opp en Excel-fil. Data behandles lokalt i nettleseren. Kun ansatte med
-          stillingskode i parentes som starter på 69, 75, 76, 79 eller er 995401, 995405, 995101 blir med.
+          Last opp en Excel-fil. Data behandles lokalt i nettleseren. Ved import får du velge
+          hvilke stillingskoder som skal inkluderes.
         </p>
       </header>
 
@@ -1164,53 +1351,166 @@ function App() {
         </button>
       </section>
 
+      {pendingImportRows.length > 0 ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="stillingskode-popup-title">
+          <section className="modal-panel">
+            <h2 id="stillingskode-popup-title">Velg stillingskoder som skal importeres</h2>
+            <p className="muted">
+              Hele stillingskode-feltet vises. Standardkoder er forhåndsvalgt øverst.
+            </p>
+
+            {allStillingskodeOptions.length === 0 ? (
+              <p className="error">Fant ingen stillingskoder i filen.</p>
+            ) : (
+              <>
+                <div className="stillingskode-section">
+                  <h3>Forhåndsvalgte standardkoder</h3>
+                  {defaultStillingskodeOptions.length === 0 ? (
+                    <p className="muted">Ingen standardkoder ble funnet i filen.</p>
+                  ) : (
+                    <>
+                      <div className="stillingskode-list-header" aria-hidden="true">
+                        <span>Stillingskode</span>
+                        <span>Arbeidstittel</span>
+                      </div>
+                      <ul className="stillingskode-list">
+                        {defaultStillingskodeOptions.map((option) => {
+                          const checked = selectedImportStillingskoder.has(option.id)
+                          return (
+                            <li key={`default-${option.id}`}>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleImportStillingskode(option.id)}
+                                />
+                                <span className="stillingskode-option-row">
+                                  <span className="stillingskode-option-code">{option.stillingskode}</span>
+                                  <span className="stillingskode-option-title">{option.arbeidstittel}</span>
+                                </span>
+                              </label>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </>
+                  )}
+                </div>
+
+                <hr className="stillingskode-divider" />
+
+                <div className="stillingskode-section">
+                  <h3>Andre stillingskoder</h3>
+                  {otherStillingskodeOptions.length === 0 ? (
+                    <p className="muted">Ingen andre stillingskoder funnet.</p>
+                  ) : (
+                    <>
+                      <div className="stillingskode-list-header" aria-hidden="true">
+                        <span>Stillingskode</span>
+                        <span>Arbeidstittel</span>
+                      </div>
+                      <ul className="stillingskode-list">
+                        {otherStillingskodeOptions.map((option) => {
+                          const checked = selectedImportStillingskoder.has(option.id)
+                          return (
+                            <li key={`other-${option.id}`}>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleImportStillingskode(option.id)}
+                                />
+                                <span className="stillingskode-option-row">
+                                  <span className="stillingskode-option-code">{option.stillingskode}</span>
+                                  <span className="stillingskode-option-title">{option.arbeidstittel}</span>
+                                </span>
+                              </label>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
+            <div className="birthday-export-footer">
+              <p className="muted">Valgt ansatte: {importPreviewCount}</p>
+              <div className="birthday-export-buttons">
+                <button
+                  disabled={importPreviewCount === 0 || allStillingskodeOptions.length === 0}
+                  onClick={confirmImportStillingskoder}
+                >
+                  Importer valgt
+                </button>
+                <button onClick={cancelImportStillingskoder}>Avbryt</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {birthdayExportFormat ? (
         <section className="panel birthday-export-panel">
           <h2>Velg avdeling og ansatte før nedlasting</h2>
           <div className="birthday-export-controls">
-            <label>
-              Avdeling
-              <select
-                value={selectedBirthdayAvdeling}
-                onChange={(event) => {
-                  setSelectedBirthdayAvdeling(event.target.value)
-                  setInactiveBirthdayExportIds(new Set())
-                }}
-              >
-                {birthdayByAvdeling.map(([avdeling]) => (
-                  <option key={avdeling} value={avdeling}>
-                    {avdeling}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="birthday-export-buttons">
-              <button onClick={() => setBirthdayAvdelingActiveState(true)}>Marker alle</button>
-              <button onClick={() => setBirthdayAvdelingActiveState(false)}>Fjern alle</button>
+            <div className="birthday-avdeling-checklist">
+              <p className="muted">1. Avdelinger</p>
+              <div className="birthday-toggle-group" role="group" aria-label="Velg avdelinger">
+                <button
+                  type="button"
+                  className={`toggle-pill ${isAllBirthdayAvdelingerSelected ? 'is-on' : ''}`}
+                  aria-pressed={isAllBirthdayAvdelingerSelected}
+                  onClick={toggleAllBirthdayAvdelinger}
+                >
+                  Alle
+                </button>
+                {birthdayByAvdeling.map(([avdeling]) => {
+                  const checked = selectedBirthdayAvdelinger.has(avdeling)
+                  return (
+                    <button
+                      key={avdeling}
+                      type="button"
+                      className={`toggle-pill ${checked ? 'is-on' : ''}`}
+                      aria-pressed={checked}
+                      onClick={() => toggleBirthdayAvdeling(avdeling)}
+                    >
+                      {avdeling}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </div>
 
           {birthdayAvdelingPeople.length === 0 ? (
             <p className="muted">Ingen ansatte i valgt avdeling.</p>
           ) : (
-            <ul className="birthday-export-list">
-              {birthdayAvdelingPeople.map((person) => {
-                const checked = !inactiveBirthdayExportIds.has(person.id)
-                return (
-                  <li key={`${person.id}-birthday-export`}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleBirthdayExportPerson(person.id)}
-                      />
-                      <span>{person.navn}</span>
-                    </label>
-                  </li>
-                )
-              })}
-            </ul>
+            <div className="birthday-person-toggle-wrapper">
+              <p className="muted">2. Ansatte i valgte avdelinger</p>
+              <ul className="birthday-export-list">
+                {birthdayAvdelingPeople.map((person) => {
+                  const checked = !inactiveBirthdayExportIds.has(person.id)
+                  return (
+                    <li key={`${person.id}-birthday-export`}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleBirthdayExportPerson(person.id)}
+                        />
+                        <span>{person.navn}</span>
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="birthday-export-buttons">
+                <button onClick={() => setBirthdayAvdelingActiveState(true)}>Marker alle</button>
+                <button onClick={() => setBirthdayAvdelingActiveState(false)}>Fjern alle</button>
+              </div>
+            </div>
           )}
 
           <div className="birthday-export-footer">

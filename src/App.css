@@ -188,13 +188,49 @@ button:disabled {
   color: #333;
 }
 
-.birthday-export-controls select {
-  min-width: 220px;
-  border: 1px solid #cfcfcf;
-  border-radius: 6px;
-  padding: 8px;
-  font-size: 13px;
-  background: #fff;
+.birthday-avdeling-checklist {
+  display: grid;
+  gap: 6px;
+}
+
+.birthday-person-toggle-wrapper {
+  display: grid;
+  gap: 6px;
+}
+
+.birthday-person-toggle-wrapper .birthday-export-buttons button {
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.birthday-toggle-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.toggle-pill {
+  border: 1px solid #c7d3de;
+  background: #f6f9fc;
+  color: #243647;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.toggle-pill:hover:enabled {
+  border-color: #8fa6bb;
+  background: #eaf1f8;
+}
+
+.toggle-pill.is-on {
+  border-color: #2e7d32;
+  background: #2e7d32;
+  color: #fff;
 }
 
 .birthday-export-buttons {
@@ -238,6 +274,95 @@ button:disabled {
   justify-content: space-between;
   gap: 10px;
   align-items: center;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  z-index: 1000;
+}
+
+.modal-panel {
+  width: min(640px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #dcdcdc;
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+}
+
+.modal-panel h2 {
+  margin: 0;
+}
+
+.stillingskode-section {
+  display: grid;
+  gap: 8px;
+}
+
+.stillingskode-section h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #222;
+}
+
+.stillingskode-divider {
+  border: none;
+  border-top: 1px solid #dcdcdc;
+  margin: 2px 0;
+}
+
+.stillingskode-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.stillingskode-list-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-left: 24px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.stillingskode-list li label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: #333;
+}
+
+.stillingskode-option-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.stillingskode-option-code,
+.stillingskode-option-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.stillingskode-option-title {
+  color: #444;
 }
 
 .highlight {
@@ -384,11 +509,6 @@ button:disabled {
 
   .birthday-export-controls {
     align-items: stretch;
-  }
-
-  .birthday-export-controls select {
-    min-width: 0;
-    width: 100%;
   }
 
   .birthday-export-footer {
